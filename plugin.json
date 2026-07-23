@@ -5,11 +5,12 @@
   "version": "1.0.0",
   "author": "Zhainy",
   "icon": "wallpaper",
-  "type": "launcher",
-  "capabilities": ["launcher"],
-  "component": "./Launcher.qml",
+  "type": "daemon",
+  "capabilities": ["wallpaper"],
+  "component": "./Daemon.qml",
   "settings": "./Settings.qml",
-  "trigger": "!wp",
-  "requires_dms": ">=1.4.0",
-  "permissions": ["settings_read", "settings_write", "process"]
+  "startupCheck": "./StartupCheck.qml",
+  "requires_dms": ">=1.5.0",
+  "permissions": ["settings_read", "settings_write", "process"],
+  "dependencies": ["awww", "matugen", "magick", "ffmpeg"]
 }

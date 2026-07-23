@@ -15,45 +15,37 @@ ORGANIZE_DIR = os.path.expanduser("~/Pictures/Wallpapers/organized-by-vibe")
 HISTORY_SIZE = 16
 PALETTE_COLORS = 6
 REZIZE_DIM = 64
-DMS_PLUGIN_SETTINGS = os.path.expanduser("~/.config/DankMaterialShell/plugin_settings.json")
 
 COLOR_DIST_HUE_W = 0.60
 COLOR_DIST_SAT_W = 0.25
 COLOR_DIST_LIT_W = 0.15
 
 TRANSITION_TYPE = "grow"
-TRANSITION_POS = "0.854,0.977"
-TRANSITION_STEP = 90
+TRANSITION_STEP = "90"
 
 def load_dms_settings():
-    """Load settings from DMS plugin_settings.json, overriding defaults."""
-    global WALLPAPER_DIRS, COLOR_DIST_HUE_W, COLOR_DIST_SAT_W, COLOR_DIST_LIT_W
-    global TRANSITION_TYPE, TRANSITION_POS, TRANSITION_STEP
-    try:
-        if not os.path.isfile(DMS_PLUGIN_SETTINGS):
-            return
-        with open(DMS_PLUGIN_SETTINGS) as f:
-            data = json.load(f)
-        ws = data.get("wallsync", {})
-        dirs_raw = ws.get("wallpaperDirs", "")
-        if dirs_raw and isinstance(dirs_raw, str):
-            dirs = [d.strip() for d in dirs_raw.split(",") if d.strip()]
-            if dirs:
-                WALLPAPER_DIRS = [os.path.expanduser(d) for d in dirs]
-        hue = ws.get("hueWeight")
-        sat = ws.get("satWeight")
-        lit = ws.get("litWeight")
-        if hue is not None: COLOR_DIST_HUE_W = float(hue)
-        if sat is not None: COLOR_DIST_SAT_W = float(sat)
-        if lit is not None: COLOR_DIST_LIT_W = float(lit)
-        tt = ws.get("transitionType")
-        if tt: TRANSITION_TYPE = str(tt)
-        tp = ws.get("transitionPos")
-        if tp: TRANSITION_POS = str(tp)
-        ts = ws.get("transitionStep")
-        if ts is not None: TRANSITION_STEP = int(ts)
-    except Exception as e:
-        print(f"[wallsync] Failed to load DMS settings: {e}", file=sys.stderr)
+    global WALLPAPER_DIRS, COLOR_DIST_HUE_W, COLOR_DIST_SAT_W, COLOR_DIST_LIT_W, TRANSITION_TYPE, TRANSITION_STEP
+    p_set = os.path.expanduser("~/.config/DankMaterialShell/plugin_settings.json")
+    if os.path.isfile(p_set):
+        try:
+            with open(p_set, "r") as f:
+                data = json.load(f)
+            ws = data.get("wallsync", {})
+            if ws:
+                dirs = ws.get("wallpaperDirs")
+                if dirs:
+                    WALLPAPER_DIRS = [os.path.expanduser(x.strip()) for x in dirs.split(",") if x.strip()]
+                
+                COLOR_DIST_HUE_W = float(ws.get("hueWeight", COLOR_DIST_HUE_W))
+                COLOR_DIST_SAT_W = float(ws.get("satWeight", COLOR_DIST_SAT_W))
+                COLOR_DIST_LIT_W = float(ws.get("litWeight", COLOR_DIST_LIT_W))
+                
+                TRANSITION_TYPE = ws.get("transitionType", TRANSITION_TYPE)
+                TRANSITION_STEP = str(ws.get("transitionStep", TRANSITION_STEP))
+                
+                print(f"[wallsync] Loaded DMS configurations. Dirs: {WALLPAPER_DIRS}", file=sys.stderr)
+        except Exception as e:
+            print(f"[wallsync WARN] Error loading DMS settings: {e}", file=sys.stderr)
 
 load_dms_settings()
 
@@ -386,6 +378,7 @@ def set_wallpaper_dms(output, path):
     )
 
 def set_wallpaper_awww(output, path):
+    global TRANSITION_TYPE, TRANSITION_STEP
     env = os.environ.copy()
     print(f"[DEBUG] set_wallpaper_awww(output={output}, path={os.path.basename(path)})", file=sys.stderr)
     print(f"[DEBUG] awww img --outputs {output} --transition-type {TRANSITION_TYPE}", file=sys.stderr)
@@ -393,16 +386,16 @@ def set_wallpaper_awww(output, path):
         "awww", "img", path,
         "--outputs", output,
         "--transition-type", TRANSITION_TYPE,
-        "--transition-pos", TRANSITION_POS,
-        "--transition-step", str(TRANSITION_STEP),
+        "--transition-pos", "0.854,0.977",
+        "--transition-step", TRANSITION_STEP,
         "--transition-fps", "60",
         "--resize", "crop",
         "--filter", "Lanczos3",
     ], capture_output=True, timeout=30, env=env)
     if r.returncode == 0:
-        print(f"[DEBUG] awww transition 'grow' succeeded on {output}", file=sys.stderr)
+        print(f"[DEBUG] awww transition '{TRANSITION_TYPE}' succeeded on {output}", file=sys.stderr)
         return True
-    print(f"[wallsync WARN] awww transition 'grow' failed for {output}: {r.stderr.strip()}", file=sys.stderr)
+    print(f"[wallsync WARN] awww transition '{TRANSITION_TYPE}' failed for {output}: {r.stderr.strip()}", file=sys.stderr)
     return False
 
 def set_live_wallpaper(output, path):
@@ -696,7 +689,9 @@ def cmd_match(args):
     record_use(path, secondary_path)
 
 def cmd_gui(args):
-    qml_config = os.path.expanduser("~/.config/wallsync-picker")
+    qml_config = os.path.expanduser("~/.config/DankMaterialShell/plugins/wallsync")
+    if not os.path.isdir(qml_config):
+        qml_config = os.path.expanduser("~/.config/wallsync-picker")
     if not os.path.isdir(qml_config):
         print(f"QML picker not found at {qml_config}", file=sys.stderr)
         sys.exit(1)
@@ -726,7 +721,13 @@ def cmd_gui(args):
 
     env = os.environ.copy()
     env["QML_XHR_ALLOW_FILE_READ"] = "1"
-    cmd = ["quickshell", "-n", "-p", qml_config]
+    
+    # Check if we are running as a standalone picker file vs plugin folder entry point
+    if os.path.isfile(os.path.join(qml_config, "Overlay.qml")):
+        cmd = ["quickshell", "-n", "-p", qml_config, "Overlay.qml"]
+    else:
+        cmd = ["quickshell", "-n", "-p", qml_config]
+        
     subprocess.run(cmd, env=env)
 
     # After quickshell exits, check if a selection was written

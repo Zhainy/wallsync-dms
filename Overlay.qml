@@ -11,13 +11,12 @@ PanelWindow {
     readonly property string cacheDir: homeDir + "/.cache/wallsync"
     readonly property string indexPath: "file://" + cacheDir + "/index.json"
     readonly property string statePath: "file://" + cacheDir + "/state.json"
-    readonly property string thumbDir: homeDir + "/.local/share/wallsync/thumbnails/"
-    readonly property string pluginDir: homeDir + "/.config/DankMaterialShell/plugins/wallsync"
-    readonly property string pythonScript: pluginDir + "/daemon/wallsync"
+    property string _td: homeDir + "/.local/share/wallsync/thumbnails/"
+    readonly property string thumbDir: _td[_td.length - 1] === "/" ? _td : _td + "/"
 
     WlrLayershell.layer: WlrLayershell.Overlay
     WlrLayershell.exclusiveZone: -1
-    WlrLayershell.namespace: "wallsync-coverflow"
+    WlrLayershell.namespace: "wallsync-picker"
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
     color: "transparent"
 
@@ -95,9 +94,11 @@ PanelWindow {
     function buildThumbPath(tf) {
         if (!tf || tf === "") return ""
         if (tf.charAt(0) === "/") {
+            // Absolute path: encode as proper file:// URI
             return "file://" + encodeURI(tf)
         }
-        return "file://" + root.thumbDir + encodeURI(tf)
+        // Basename: use thumbDir prefix
+        return "file://" + root.thumbDir + tf
     }
 
     function getBasename(path) {
@@ -106,13 +107,16 @@ PanelWindow {
         return idx >= 0 ? path.substring(idx + 1) : path
     }
 
+
     function processData(images) {
         allEntries = []
         var vc = {}
         var liveCount = 0
         var skipped = 0
+        var totalPaths = 0
 
         for (var path in images) {
+            totalPaths++
             var info = images[path]
             var ev = info.vibes
             if (!Array.isArray(ev) || ev.length === 0) { skipped++; continue }
@@ -134,6 +138,9 @@ PanelWindow {
             for (var i = 0; i < ev.length; i++) vc[ev[i]] = (vc[ev[i]] || 0) + 1
         }
 
+        console.log("DIAG: processData totalPaths=" + totalPaths + " skipped=" + skipped + " valid=" + allEntries.length)
+
+        // Sort by path for deterministic order (QML for...in order is NOT guaranteed)
         allEntries.sort(function(a, b) {
             if (a.path < b.path) return -1
             if (a.path > b.path) return 1
@@ -146,11 +153,11 @@ PanelWindow {
 
         vibeModel.clear()
         vibeModel.append({ label: "All", vibe: "", count: allEntries.length, active: true })
-
+        
         if (liveCount > 0) {
-            vibeModel.append({ label: "LIVE", vibe: "LIVE_ONLY", count: liveCount, active: false })
+            vibeModel.append({ label: "🎬 LIVE", vibe: "LIVE_ONLY", count: liveCount, active: false })
         }
-
+        
         for (var j = 0; j < va.length; j++) {
             vibeModel.append({ label: va[j].vibe, vibe: va[j].vibe, count: va[j].count, active: false })
         }
@@ -204,14 +211,16 @@ PanelWindow {
         } catch (_) {}
 
         if (cleanPath.charAt(0) !== "/") {
-            console.error("applyWallpaper: non-absolute path: " + cleanPath)
+            console.error("applyWallpaper: ruta no absoluta: " + cleanPath)
             return
         }
 
-        console.log("APPLY:", cleanPath)
+        console.log("APPLY: idx=" + listView.currentIndex + " path=" + cleanPath)
 
         Quickshell.execDetached([
-            pythonScript, "match", cleanPath
+            "python3", "-c",
+            "import sys; f=open('/tmp/wallsync_selection','w'); f.write(sys.argv[1]); f.close()",
+            cleanPath
         ])
 
         var t = Qt.createQmlObject("import QtQuick; Timer {}", root)
@@ -230,6 +239,7 @@ PanelWindow {
         }
     }
 
+    // Backdrop
     Rectangle {
         anchors.fill: parent
         color: "#050609"
@@ -241,6 +251,7 @@ PanelWindow {
         }
     }
 
+    // Top Header
     Column {
         anchors.horizontalCenter: parent.horizontalCenter
         y: parent.height * 0.05
@@ -257,7 +268,7 @@ PanelWindow {
 
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
-            text: wallpaperModel.count + " wallpapers" + (currentVibe !== "" ? "  •  " + (currentVibe === "LIVE_ONLY" ? "LIVE" : currentVibe.toUpperCase()) : "")
+            text: wallpaperModel.count + " wallpapers" + (currentVibe !== "" ? "  •  " + (currentVibe === "LIVE_ONLY" ? "🎬 LIVE" : currentVibe.toUpperCase()) : "")
             color: Qt.hsla(root.accentHue / 360, 0.75, 0.70, 0.90)
             font.pixelSize: 13
             font.weight: Font.DemiBold
@@ -292,6 +303,7 @@ PanelWindow {
             }
         }
 
+        // ─── Floating Dynamic Vibe Filter Chips Dock (Shrink-Wrapped & Centered) ───
         Rectangle {
             id: filterDock
             anchors.horizontalCenter: parent.horizontalCenter
@@ -363,6 +375,7 @@ PanelWindow {
                     }
                 }
 
+                // Scroll horizontal con la rueda del ratón
                 MouseArea {
                     anchors.fill: parent
                     propagateComposedEvents: true
@@ -379,6 +392,7 @@ PanelWindow {
             }
         }
 
+        // Full-Width 3D Coverflow View
         Item {
             anchors.left: parent.left
             anchors.right: parent.right
@@ -386,6 +400,7 @@ PanelWindow {
             anchors.bottom: parent.bottom
             anchors.bottomMargin: 40
 
+            // Floating filename badge — shows the CURRENT centered item's filename
             Rectangle {
                 id: currentLabel
                 anchors.horizontalCenter: parent.horizontalCenter
@@ -458,25 +473,14 @@ PanelWindow {
                     height: root.cardH
                     anchors.verticalCenter: parent ? parent.verticalCenter : undefined
 
-                    property real _cDist: 0
-                    property real absDist: 0
-
-                    function updateDist() {
-                        var lv = ListView.view
-                        if (!lv || lv.width === 0) { _cDist = 0; absDist = 0; return }
-                        var vc = lv.contentX + lv.width / 2
+                    readonly property real cDist: {
+                        if (!ListView.view || ListView.view.width === 0) return 0
+                        var vc = ListView.view.contentX + ListView.view.width / 2
                         var ic = x + width / 2
-                        _cDist = (ic - vc) / (root.cardW * 0.95)
-                        absDist = Math.abs(_cDist)
+                        return (ic - vc) / (root.cardW * 0.95)
                     }
 
-                    Connections {
-                        target: listView
-                        function onContentXChanged() { if (!listView.moving && !listView.flicking) d.updateDist() }
-                        function onMovementEnded() { d.updateDist() }
-                    }
-
-                    Component.onCompleted: updateDist()
+                    readonly property real absDist: Math.abs(cDist)
 
                     scale: Math.max(0.60, 1.0 - absDist * 0.35)
                     opacity: Math.max(0.35, 1.0 - absDist * 0.50)
@@ -486,8 +490,11 @@ PanelWindow {
                         origin.x: d.width / 2
                         origin.y: d.height / 2
                         axis { x: 0; y: 1; z: 0 }
-                        angle: Math.max(-45, Math.min(45, d._cDist * -38))
+                        angle: Math.max(-45, Math.min(45, d.cDist * -38))
                     }
+
+                    Behavior on scale { SmoothedAnimation { duration: 200; velocity: 8 } }
+                    Behavior on opacity { SmoothedAnimation { duration: 200; velocity: 6 } }
 
                     Rectangle {
                         id: card
@@ -549,7 +556,7 @@ PanelWindow {
                             Text {
                                 id: btxt
                                 anchors.centerIn: parent
-                                text: mediaType === "video" ? "MP4" : "GIF"
+                                text: mediaType === "video" ? "▶ LIVE MP4" : "🎞 GIF"
                                 color: "#ffffff"
                                 font.pixelSize: 9
                                 font.weight: Font.Bold
@@ -588,7 +595,7 @@ PanelWindow {
 
                                 Text {
                                     width: parent.width
-                                    text: (vibesString || "") + (d.imgWidth > 0 ? "  (" + d.imgWidth + "\u00d7" + d.imgHeight + ")" : "")
+                                    text: (vibesString || "") + (d.imgWidth > 0 ? "  (" + d.imgWidth + "×" + d.imgHeight + ")" : "")
                                     color: Qt.rgba(1, 1, 1, 0.65)
                                     font.pixelSize: 10
                                     elide: Text.ElideRight
@@ -605,6 +612,7 @@ PanelWindow {
 
                         onClicked: {
                             root.selectedPath = d.path
+                            console.log("DIAG: onClick path=" + d.path)
                             if (index === listView.currentIndex) {
                                 applyWallpaper(d.path)
                             } else {
@@ -615,6 +623,7 @@ PanelWindow {
 
                         onDoubleClicked: {
                             root.selectedPath = d.path
+                            console.log("DIAG: onDoubleClick path=" + d.path)
                             applyWallpaper(d.path)
                         }
 
@@ -640,7 +649,7 @@ PanelWindow {
         Text {
             id: hintTxt
             anchors.centerIn: parent
-            text: "\u2190 \u2192 / H L navigate  \u2022  scroll  \u2022  Click / Enter select  \u2022  Esc close"
+            text: "← → / H L navigate  •  scroll  •  Click / Enter select  •  Esc close"
             color: Qt.rgba(1, 1, 1, 0.50)
             font.pixelSize: 10
             font.letterSpacing: 0.3

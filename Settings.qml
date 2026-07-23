@@ -1,27 +1,28 @@
 import QtQuick
 import qs.Common
-import qs.Widgets
 import qs.Modules.Plugins
+import qs.Widgets
 
 PluginSettings {
     id: root
     pluginId: "wallsync"
 
     Component.onCompleted: {
-        initSetting("wallpaperDirs", "~/Pictures/Wallpapers")
-        initSetting("transitionType", "grow")
-        initSetting("transitionStep", 90)
-        initSetting("indexWorkers", 4)
-        initSetting("launcherTrigger", "!wp")
-        initSetting("hueWeight", 0.60)
-        initSetting("satWeight", 0.25)
-        initSetting("litWeight", 0.15)
+        // Initialize and register all settings defaults in the DMS database
+        // so that the controls bind and show up correctly.
+        initSetting("wallpaperDirs", "~/Pictures/Wallpapers");
+        initSetting("transitionType", "grow");
+        initSetting("transitionStep", 90);
+        initSetting("indexWorkers", 4);
+        initSetting("hueWeight", 0.60);
+        initSetting("satWeight", 0.25);
+        initSetting("litWeight", 0.15);
     }
 
-    function initSetting(key, defaultValue) {
-        var val = root.loadValue(key, defaultValue)
-        if (val === undefined || val === null || val === "") {
-            root.saveValue(key, defaultValue)
+    function initSetting(key, defVal) {
+        const val = root.loadValue(key, undefined);
+        if (val === undefined) {
+            root.saveValue(key, defVal);
         }
     }
 
@@ -35,24 +36,31 @@ PluginSettings {
 
     StyledText {
         width: parent.width
-        text: "Configure wallpaper directories, transitions, and color matching"
+        text: "Configure wallpaper directories, transitions, and HSL color weights."
         font.pixelSize: Theme.fontSizeSmall
         color: Theme.surfaceVariantText
         wrapMode: Text.WordWrap
         bottomPadding: Theme.spacingM
     }
 
+    Rectangle {
+        width: parent.width
+        height: 1
+        color: Theme.outline
+        opacity: 0.2
+    }
+
     StringSetting {
         settingKey: "wallpaperDirs"
         label: "Wallpaper Directories"
-        description: "Comma-separated paths to wallpaper folders"
+        description: "Comma-separated paths to wallpaper folders (e.g. ~/Pictures/Wallpapers)"
         placeholder: "~/Pictures/Wallpapers"
         defaultValue: "~/Pictures/Wallpapers"
     }
 
     StyledText {
         width: parent.width
-        text: "Transitions"
+        text: "Transition Settings"
         font.pixelSize: Theme.fontSizeMedium
         font.weight: Font.Bold
         color: Theme.primary
@@ -64,6 +72,7 @@ PluginSettings {
         settingKey: "transitionType"
         label: "Transition Type"
         description: "awww wallpaper transition effect"
+        defaultValue: "grow"
         options: [
             { label: "Grow", value: "grow" },
             { label: "Outer", value: "outer" },
@@ -75,13 +84,12 @@ PluginSettings {
             { label: "Top", value: "top" },
             { label: "Bottom", value: "bottom" }
         ]
-        defaultValue: "grow"
     }
 
     SliderSetting {
         settingKey: "transitionStep"
         label: "Transition Speed"
-        description: "Animation speed (lower = faster)"
+        description: "Animation speed step (lower = faster)"
         defaultValue: 90
         minimum: 20
         maximum: 300
@@ -90,7 +98,7 @@ PluginSettings {
 
     StyledText {
         width: parent.width
-        text: "Indexing"
+        text: "Indexing & Performance"
         font.pixelSize: Theme.fontSizeMedium
         font.weight: Font.Bold
         color: Theme.primary
@@ -101,7 +109,7 @@ PluginSettings {
     SliderSetting {
         settingKey: "indexWorkers"
         label: "Index Workers"
-        description: "Parallel workers for thumbnail generation"
+        description: "Parallel threads used during thumbnail generation"
         defaultValue: 4
         minimum: 1
         maximum: 16
@@ -110,25 +118,7 @@ PluginSettings {
 
     StyledText {
         width: parent.width
-        text: "Launcher"
-        font.pixelSize: Theme.fontSizeMedium
-        font.weight: Font.Bold
-        color: Theme.primary
-        topPadding: Theme.spacingM
-        bottomPadding: Theme.spacingXS
-    }
-
-    StringSetting {
-        settingKey: "launcherTrigger"
-        label: "Launcher Trigger"
-        description: "Prefix to activate wallsync in Spotlight"
-        placeholder: "!wp"
-        defaultValue: "!wp"
-    }
-
-    StyledText {
-        width: parent.width
-        text: "Color Matching"
+        text: "HSL Matching Weights"
         font.pixelSize: Theme.fontSizeMedium
         font.weight: Font.Bold
         color: Theme.primary
@@ -138,8 +128,8 @@ PluginSettings {
 
     SliderSetting {
         settingKey: "hueWeight"
-        label: "Hue Weight"
-        description: "Importance of hue in color matching (0.0 - 1.0)"
+        label: "Hue Importance"
+        description: "HSL Hue match weighting"
         defaultValue: 0.60
         minimum: 0.0
         maximum: 1.0
@@ -149,8 +139,8 @@ PluginSettings {
 
     SliderSetting {
         settingKey: "satWeight"
-        label: "Saturation Weight"
-        description: "Importance of saturation in color matching (0.0 - 1.0)"
+        label: "Saturation Importance"
+        description: "HSL Saturation match weighting"
         defaultValue: 0.25
         minimum: 0.0
         maximum: 1.0
@@ -160,8 +150,8 @@ PluginSettings {
 
     SliderSetting {
         settingKey: "litWeight"
-        label: "Lightness Weight"
-        description: "Importance of lightness in color matching (0.0 - 1.0)"
+        label: "Lightness Importance"
+        description: "HSL Lightness match weighting"
         defaultValue: 0.15
         minimum: 0.0
         maximum: 1.0

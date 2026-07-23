@@ -1,3 +1,14 @@
-__pycache__/
+# Cache & generated data
 *.pyc
+__pycache__/
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Editor
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
