@@ -8,7 +8,7 @@ import qs.Modules.Plugins
 PluginComponent {
     id: root
 
-    property string statePath: Env.getEnv("HOME") + "/.cache/wallsync/state.json"
+    property string statePath: Env.homePath + "/.cache/wallsync/state.json"
 
     Component.onCompleted: {
         ensureAwwwDaemon()

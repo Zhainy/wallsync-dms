@@ -28,7 +28,6 @@ QtObject {
 
     function loadIndex() {
         Proc.runCommand("wallsync.loadIndex", ["cat", indexFile], (stdout, exitCode) => {
-        Proc.runCommand("wallsync.loadIndex", ["cat", indexPath], (stdout, exitCode) => {
             if (exitCode === 0 && stdout.length > 0) {
                 try {
                     _indexData = JSON.parse(stdout)
@@ -164,7 +163,7 @@ QtObject {
             Quickshell.execDetached([pythonScript, "random"])
             ToastService.showInfo("Wallsync", "Setting random pair...")
         } else if (actionType === "gui") {
-            Quickshell.execDetached(["quickshell", "-n", "-p", pluginDir + "/Overlay.qml"])
+            Quickshell.execDetached(["quickshell", "-n", "-p", pluginDir, "Overlay.qml"])
         }
     }
 
