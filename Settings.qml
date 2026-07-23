@@ -7,7 +7,6 @@ PluginSettings {
     pluginId: "wallsync"
 
     StyledText {
-        width: parent.width
         text: "Wallsync Settings"
         font.pixelSize: Theme.fontSizeLarge
         font.weight: Font.Bold
@@ -15,8 +14,7 @@ PluginSettings {
     }
 
     StyledText {
-        width: parent.width
-        text: "Run 'wallsync index' from terminal to index your wallpapers."
+        text: "Work in progress — full settings coming soon."
         font.pixelSize: Theme.fontSizeSmall
         color: Theme.surfaceVariantText
         wrapMode: Text.WordWrap
