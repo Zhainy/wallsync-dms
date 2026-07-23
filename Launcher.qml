@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import Quickshell.Io
 import qs.Common
 import qs.Services
 
@@ -60,6 +61,6 @@ QtObject {
 
     function executeItem(item) {
         if (!item?.action) return
-        ToastService.showInfo("Wallsync", "Run 'wallsync index' first, then 'wallsync gui'")
+        ToastService.showInfo("Wallsync", "Run 'wallsync index' first")
     }
 }

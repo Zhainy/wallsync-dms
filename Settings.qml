@@ -1,21 +1,28 @@
 import QtQuick
 import qs.Common
-import qs.Modules.Plugins
 import qs.Widgets
+import qs.Modules.Plugins
 
 PluginSettings {
     id: root
     pluginId: "wallsync"
 
     Component.onCompleted: {
-        saveValue("wallpaperDirs", "~/Pictures/Wallpapers")
-        saveValue("transitionType", "grow")
-        saveValue("transitionStep", 90)
-        saveValue("indexWorkers", 4)
-        saveValue("launcherTrigger", "!wp")
-        saveValue("hueWeight", 0.60)
-        saveValue("satWeight", 0.25)
-        saveValue("litWeight", 0.15)
+        initSetting("wallpaperDirs", "~/Pictures/Wallpapers")
+        initSetting("transitionType", "grow")
+        initSetting("transitionStep", 90)
+        initSetting("indexWorkers", 4)
+        initSetting("launcherTrigger", "!wp")
+        initSetting("hueWeight", 0.60)
+        initSetting("satWeight", 0.25)
+        initSetting("litWeight", 0.15)
+    }
+
+    function initSetting(key, defaultValue) {
+        var val = root.loadValue(key, defaultValue)
+        if (val === undefined || val === null || val === "") {
+            root.saveValue(key, defaultValue)
+        }
     }
 
     StyledText {
