@@ -3,12 +3,14 @@ import Quickshell
 import Quickshell.Io
 import qs.Common
 import qs.Services
-import qs.Modules.Plugins
 
-PluginComponent {
+QtObject {
     id: root
 
-    property string statePath: Env.homePath + "/.cache/wallsync/state.json"
+    property var pluginService: null
+    property string pluginId: "wallsync"
+
+    readonly property string statePath: Env.homePath + "/.cache/wallsync/state.json"
 
     Component.onCompleted: {
         ensureAwwwDaemon()
