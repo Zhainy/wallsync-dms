@@ -7,11 +7,13 @@ import Quickshell.Wayland
 PanelWindow {
     id: root
 
-    readonly property string cacheDir: Env.pathHome + "/.cache/wallsync"
+    readonly property string homeDir: Env.homePath
+    readonly property string cacheDir: homeDir + "/.cache/wallsync"
     readonly property string indexPath: "file://" + cacheDir + "/index.json"
     readonly property string statePath: "file://" + cacheDir + "/state.json"
-    readonly property string thumbDir: Env.pathHome + "/.local/share/wallsync/thumbnails/"
-    readonly property string pluginDir: Env.dmsPluginDir + "/wallsync/"
+    readonly property string thumbDir: homeDir + "/.local/share/wallsync/thumbnails/"
+    readonly property string pluginDir: homeDir + "/.config/DankMaterialShell/plugins/wallsync"
+    readonly property string pythonScript: pluginDir + "/daemon/wallsync"
 
     WlrLayershell.layer: WlrLayershell.Overlay
     WlrLayershell.exclusiveZone: -1
@@ -209,7 +211,7 @@ PanelWindow {
         console.log("APPLY:", cleanPath)
 
         Quickshell.execDetached([
-            "dms", "ipc", "call", "plugins.invoke", "wallsync.match", cleanPath
+            pythonScript, "match", cleanPath
         ])
 
         var t = Qt.createQmlObject("import QtQuick; Timer {}", root)

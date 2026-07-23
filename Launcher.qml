@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import Quickshell.Io
 import qs.Common
 import qs.Services
 
@@ -11,6 +12,12 @@ QtObject {
     property string trigger: pluginService?.loadPluginData(pluginId, "launcherTrigger", "!wp") ?? "!wp"
     signal itemsChanged
 
+    readonly property string homeDir: Env.homePath
+    readonly property string indexFile: homeDir + "/.cache/wallsync/index.json"
+    readonly property string thumbDir: homeDir + "/.local/share/wallsync/thumbnails/"
+    readonly property string pluginDir: homeDir + "/.config/DankMaterialShell/plugins/wallsync"
+    readonly property string pythonScript: pluginDir + "/daemon/wallsync"
+
     property var _cachedItems: []
     property var _cachedCategories: []
     property var _indexData: null
@@ -20,7 +27,7 @@ QtObject {
     }
 
     function loadIndex() {
-        var indexPath = Env.pathHome + "/.cache/wallsync/index.json"
+        Proc.runCommand("wallsync.loadIndex", ["cat", indexFile], (stdout, exitCode) => {
         Proc.runCommand("wallsync.loadIndex", ["cat", indexPath], (stdout, exitCode) => {
             if (exitCode === 0 && stdout.length > 0) {
                 try {
@@ -84,7 +91,7 @@ QtObject {
                 if (thumbRaw.charAt(0) === "/") {
                     thumbUrl = "file://" + encodeURI(thumbRaw)
                 } else {
-                    thumbUrl = "file://" + Env.pathHome + "/.local/share/wallsync/thumbnails/" + encodeURI(thumbRaw)
+                    thumbUrl = "file://" + thumbDir + encodeURI(thumbRaw)
                 }
             }
 
@@ -151,13 +158,13 @@ QtObject {
 
         if (actionType === "match" && parts[1]) {
             var path = parts[1]
-            Quickshell.execDetached(["dms", "ipc", "call", "plugins.invoke", "wallsync.match", path])
+            Quickshell.execDetached([pythonScript, "match", path])
             ToastService.showInfo("Wallsync", "Applying wallpaper...")
         } else if (actionType === "random") {
-            Quickshell.execDetached(["dms", "ipc", "call", "plugins.invoke", "wallsync.random"])
+            Quickshell.execDetached([pythonScript, "random"])
             ToastService.showInfo("Wallsync", "Setting random pair...")
         } else if (actionType === "gui") {
-            Quickshell.execDetached(["dms", "ipc", "call", "plugins.invoke", "wallsync.gui"])
+            Quickshell.execDetached(["quickshell", "-n", "-p", pluginDir + "/Overlay.qml"])
         }
     }
 

@@ -9,11 +9,10 @@
   "capabilities": ["daemon", "launcher"],
   "components": {
     "daemon": "./Daemon.qml",
-    "launcher": "./Launcher.qml",
-    "settings": "./Settings.qml"
+    "launcher": "./Launcher.qml"
   },
+  "settings": "./Settings.qml",
   "trigger": "!wp",
-  "startupCheck": "./StartupCheck.qml",
   "requires_dms": ">=1.5.0",
   "permissions": ["settings_read", "settings_write"],
   "dependencies": ["awww", "matugen", "magick", "ffmpeg"]
