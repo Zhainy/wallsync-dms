@@ -458,14 +458,25 @@ PanelWindow {
                     height: root.cardH
                     anchors.verticalCenter: parent ? parent.verticalCenter : undefined
 
-                    readonly property real cDist: {
-                        if (!ListView.view || ListView.view.width === 0) return 0
-                        var vc = ListView.view.contentX + ListView.view.width / 2
+                    property real _cDist: 0
+                    property real absDist: 0
+
+                    function updateDist() {
+                        var lv = ListView.view
+                        if (!lv || lv.width === 0) { _cDist = 0; absDist = 0; return }
+                        var vc = lv.contentX + lv.width / 2
                         var ic = x + width / 2
-                        return (ic - vc) / (root.cardW * 0.95)
+                        _cDist = (ic - vc) / (root.cardW * 0.95)
+                        absDist = Math.abs(_cDist)
                     }
 
-                    readonly property real absDist: Math.abs(cDist)
+                    Connections {
+                        target: listView
+                        function onContentXChanged() { if (!listView.moving && !listView.flicking) d.updateDist() }
+                        function onMovementEnded() { d.updateDist() }
+                    }
+
+                    Component.onCompleted: updateDist()
 
                     scale: Math.max(0.60, 1.0 - absDist * 0.35)
                     opacity: Math.max(0.35, 1.0 - absDist * 0.50)
@@ -475,11 +486,8 @@ PanelWindow {
                         origin.x: d.width / 2
                         origin.y: d.height / 2
                         axis { x: 0; y: 1; z: 0 }
-                        angle: Math.max(-45, Math.min(45, d.cDist * -38))
+                        angle: Math.max(-45, Math.min(45, d._cDist * -38))
                     }
-
-                    Behavior on scale { SmoothedAnimation { duration: 200; velocity: 8 } }
-                    Behavior on opacity { SmoothedAnimation { duration: 200; velocity: 6 } }
 
                     Rectangle {
                         id: card
@@ -488,7 +496,7 @@ PanelWindow {
                         color: Qt.hsla(dominantHue / 360, 0.25, 0.15, 0.85)
                         clip: true
 
-                        layer.enabled: d.absDist < 0.8
+                        layer.enabled: d.absDist < 0.3
                         layer.effect: MultiEffect {
                             shadowEnabled: true
                             shadowColor: Qt.rgba(0, 0, 0, d.absDist < 0.3 ? 0.70 : 0.35)

@@ -7,6 +7,17 @@ PluginSettings {
     id: root
     pluginId: "wallsync"
 
+    Component.onCompleted: {
+        saveValue("wallpaperDirs", "~/Pictures/Wallpapers")
+        saveValue("transitionType", "grow")
+        saveValue("transitionStep", 90)
+        saveValue("indexWorkers", 4)
+        saveValue("launcherTrigger", "!wp")
+        saveValue("hueWeight", 0.60)
+        saveValue("satWeight", 0.25)
+        saveValue("litWeight", 0.15)
+    }
+
     StyledText {
         width: parent.width
         text: "Wallsync Settings"
