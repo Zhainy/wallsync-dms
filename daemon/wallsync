@@ -1,0 +1,824 @@
+#!/usr/bin/env python3
+"""wallsync — Dual-monitor wallpaper manager for Niri + DMS + Matugen."""
+
+import os, sys, json, math, time, subprocess, argparse, re, hashlib, shutil, urllib.parse
+from pathlib import Path
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+WALLPAPER_DIRS = [os.path.expanduser("~/Pictures/Wallpapers")]
+CACHE_DIR = os.path.expanduser("~/.cache/wallsync")
+INDEX_PATH = os.path.join(CACHE_DIR, "index.json")
+STATE_PATH = os.path.join(CACHE_DIR, "state.json")
+THUMB_DIR = os.path.expanduser("~/.local/share/wallsync/thumbnails")
+ORGANIZE_DIR = os.path.expanduser("~/Pictures/Wallpapers/organized-by-vibe")
+HISTORY_SIZE = 16
+PALETTE_COLORS = 6
+REZIZE_DIM = 64
+DMS_PLUGIN_SETTINGS = os.path.expanduser("~/.config/DankMaterialShell/plugin_settings.json")
+
+COLOR_DIST_HUE_W = 0.60
+COLOR_DIST_SAT_W = 0.25
+COLOR_DIST_LIT_W = 0.15
+
+TRANSITION_TYPE = "grow"
+TRANSITION_POS = "0.854,0.977"
+TRANSITION_STEP = 90
+
+def load_dms_settings():
+    """Load settings from DMS plugin_settings.json, overriding defaults."""
+    global WALLPAPER_DIRS, COLOR_DIST_HUE_W, COLOR_DIST_SAT_W, COLOR_DIST_LIT_W
+    global TRANSITION_TYPE, TRANSITION_POS, TRANSITION_STEP
+    try:
+        if not os.path.isfile(DMS_PLUGIN_SETTINGS):
+            return
+        with open(DMS_PLUGIN_SETTINGS) as f:
+            data = json.load(f)
+        ws = data.get("wallsync", {})
+        dirs_raw = ws.get("wallpaperDirs", "")
+        if dirs_raw and isinstance(dirs_raw, str):
+            dirs = [d.strip() for d in dirs_raw.split(",") if d.strip()]
+            if dirs:
+                WALLPAPER_DIRS = [os.path.expanduser(d) for d in dirs]
+        hue = ws.get("hueWeight")
+        sat = ws.get("satWeight")
+        lit = ws.get("litWeight")
+        if hue is not None: COLOR_DIST_HUE_W = float(hue)
+        if sat is not None: COLOR_DIST_SAT_W = float(sat)
+        if lit is not None: COLOR_DIST_LIT_W = float(lit)
+        tt = ws.get("transitionType")
+        if tt: TRANSITION_TYPE = str(tt)
+        tp = ws.get("transitionPos")
+        if tp: TRANSITION_POS = str(tp)
+        ts = ws.get("transitionStep")
+        if ts is not None: TRANSITION_STEP = int(ts)
+    except Exception as e:
+        print(f"[wallsync] Failed to load DMS settings: {e}", file=sys.stderr)
+
+load_dms_settings()
+
+VIBE_RANGES = [
+    ("red",     0, 20,    0.22, 1.0),
+    ("orange",  20, 50,   0.30, 1.0),
+    ("yellow",  50, 75,   0.32, 1.0),
+    ("green",   75, 150,  0.25, 1.0),
+    ("cyan",    150, 195, 0.22, 1.0),
+    ("blue",    195, 260, 0.22, 1.0),
+    ("purple",  260, 290, 0.25, 1.0),
+    ("pink",    290, 340, 0.25, 1.0),
+    ("red",     340, 361, 0.22, 1.0),
+]
+
+VIDEO_EXTS = (".mp4", ".webm", ".mkv", ".mov")
+GIF_EXTS = (".gif",)
+STATIC_EXTS = (".jpg", ".jpeg", ".png", ".webp")
+
+# ─── Color utilities ───────────────────────────────────────────
+
+def rgb_to_hsl(r, g, b):
+    r, g, b = r / 255.0, g / 255.0, b / 255.0
+    mx, mn = max(r, g, b), min(r, g, b)
+    l = (mx + mn) / 2.0
+    if mx == mn:
+        return 0.0, 0.0, l
+    d = mx - mn
+    s = d / (2.0 - mx - mn) if l > 0.5 else d / (mx + mn)
+    if mx == r:
+        h = (g - b) / d + (6.0 if b > g else 0.0)
+    elif mx == g:
+        h = (b - r) / d + 2.0
+    else:
+        h = (r - g) / d + 4.0
+    h /= 6.0
+    return h * 360.0, s, l
+
+def hsl_to_rgb(h, s, l):
+    h = h / 360.0
+    if s == 0:
+        v = int(l * 255)
+        return v, v, v
+    def hue2rgb(p, q, t):
+        t = t % 1.0
+        if t < 1/6: return p + (q - p) * 6 * t
+        if t < 1/2: return q
+        if t < 2/3: return p + (q - p) * (2/3 - t) * 6
+        return p
+    q = l * (1 + s) if l < 0.5 else l + s - l * s
+    p = 2 * l - q
+    r = hue2rgb(p, q, h + 1/3)
+    g = hue2rgb(p, q, h)
+    b = hue2rgb(p, q, h - 1/3)
+    return int(r * 255), int(g * 255), int(b * 255)
+
+def hsl_distance(h1, s1, l1, h2, s2, l2):
+    dh = min(abs(h1 - h2), 360.0 - abs(h1 - h2)) / 180.0
+    return COLOR_DIST_HUE_W * dh + COLOR_DIST_SAT_W * abs(s1 - s2) + COLOR_DIST_LIT_W * abs(l1 - l2)
+
+def palette_distance(pal1, pal2):
+    if not pal1 or not pal2:
+        return float("inf")
+    total, wsum = 0.0, 0.0
+    for h1, s1, l1, w1 in pal1:
+        best = min(hsl_distance(h1, s1, l1, h2, s2, l2) for h2, s2, l2, _ in pal2)
+        total += best * w1
+        wsum += w1
+    return total / wsum if wsum else float("inf")
+
+def classify_vibes(h, s, l):
+    vibes = set()
+
+    if l < 0.14:
+        vibes.add("dark")
+        if s < 0.08:
+            vibes.add("gray")
+        return sorted(vibes)
+
+    if s < 0.10:
+        vibes.add("gray")
+        if l < 0.25:
+            vibes.add("dark")
+        if l > 0.70:
+            vibes.add("pastel")
+        return sorted(vibes)
+
+    if s < 0.16:
+        vibes.add("gray")
+    if l < 0.22:
+        vibes.add("dark")
+    if l > 0.72 and s < 0.30:
+        vibes.add("pastel")
+    if s > 0.60 and l > 0.25:
+        vibes.add("vibrant")
+
+    for name, hmin, hmax, smin, _ in VIBE_RANGES:
+        if hmin <= h < hmax and s >= smin:
+            vibes.add(name)
+
+    vibes.add("warm" if h < 60 or h >= 300 else "cool")
+    return sorted(vibes)
+
+# ─── Media type detection ─────────────────────────────────────
+
+def media_type(path):
+    ext = os.path.splitext(path)[1].lower()
+    if ext in VIDEO_EXTS:
+        return "video"
+    if ext in GIF_EXTS:
+        return "gif"
+    if ext in STATIC_EXTS:
+        return "static"
+    return "static"
+
+# ─── Thumbnail extraction (ffmpeg) ────────────────────────────
+
+def path_hash(path):
+    return hashlib.md5(path.encode()).hexdigest()[:12]
+
+def extract_thumbnail(path):
+    mtype = media_type(path)
+    if mtype == "static":
+        return path
+    os.makedirs(THUMB_DIR, exist_ok=True)
+    thumb = os.path.join(THUMB_DIR, path_hash(path) + ".jpg")
+    if os.path.isfile(thumb) and os.path.getsize(thumb) > 1000:
+        return thumb
+    if mtype == "gif":
+        cmd = ["ffmpeg", "-y", "-i", path, "-vframes", "1", thumb]
+    else:
+        dur_cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1", path]
+        try:
+            dur_r = subprocess.run(dur_cmd, capture_output=True, text=True, timeout=15)
+            duration = float(dur_r.stdout.strip()) if dur_r.returncode == 0 else 5.0
+        except Exception:
+            duration = 5.0
+        ts = max(0.5, duration * 0.25)
+        cmd = ["ffmpeg", "-y", "-ss", str(ts), "-i", path, "-vframes", "1", thumb]
+    try:
+        subprocess.run(cmd, capture_output=True, timeout=30)
+        if os.path.isfile(thumb) and os.path.getsize(thumb) > 1000:
+            return thumb
+    except Exception as e:
+        print(f"ffmpeg extraction warning: {e}", file=sys.stderr)
+    return None
+
+# ─── ImageMagick color extraction ──────────────────────────────
+
+def extract_colors(path):
+    cmd = [
+        "magick", path,
+        "-resize", f"{REZIZE_DIM}x{REZIZE_DIM}!",
+        "-colors", str(PALETTE_COLORS),
+        "-depth", "8",
+        "-format", "%c",
+        "histogram:info:-"
+    ]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+    except Exception as e:
+        return None, str(e)
+    if r.returncode != 0:
+        return None, r.stderr.strip() or "magick error"
+    colors = []
+    total_pixels = 0
+    seen_hex = set()
+    for line in r.stdout.strip().split("\n"):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = re.match(r'(\d+):\s*\(\s*(\d+),\s*(\d+),\s*(\d+)', line)
+        if not m:
+            continue
+        count = int(m.group(1))
+        rv, gv, bv = int(m.group(2)), int(m.group(3)), int(m.group(4))
+        hexkey = f"{rv:02x}{gv:02x}{bv:02x}"
+        if hexkey in seen_hex:
+            continue
+        seen_hex.add(hexkey)
+        h, s, l = rgb_to_hsl(rv, gv, bv)
+        colors.append((h, s, l, count))
+        total_pixels += count
+    if not colors:
+        return None, "no colors extracted"
+    colors.sort(key=lambda x: x[3], reverse=True)
+    normalized = [(h, s, l, c / total_pixels) for h, s, l, c in colors]
+    dom_h = sum(h * w for h, s, l, w in normalized)
+    dom_s = sum(s * w for h, s, l, w in normalized)
+    dom_l = sum(l * w for h, s, l, w in normalized)
+    vibes = classify_vibes(dom_h, dom_s, dom_l)
+    ri = subprocess.run(
+        ["magick", path, "-format", "%w %h", "info:"],
+        capture_output=True, text=True, timeout=10
+    )
+    dims = (0, 0)
+    if ri.returncode == 0:
+        parts = ri.stdout.strip().split()
+        if len(parts) >= 2:
+            dims = (int(parts[0]), int(parts[1]))
+    return {
+        "palette": [(round(h, 1), round(s, 3), round(l, 3), round(w, 4))
+                     for h, s, l, w in normalized],
+        "dominant_hue": round(dom_h, 1),
+        "dominant_saturation": round(dom_s, 3),
+        "dominant_lightness": round(dom_l, 3),
+        "vibes": vibes,
+        "width": dims[0],
+        "height": dims[1],
+    }, None
+
+def index_media(path):
+    mtype = media_type(path)
+    if mtype == "static":
+        target = path
+    elif mtype in ("video", "gif"):
+        target = extract_thumbnail(path)
+        if not target:
+            return None, "no thumbnail extracted"
+    else:
+        return None, "unsupported type"
+    result, err = extract_colors(target)
+    if err:
+        return None, err
+    result["media_type"] = mtype
+    if mtype in ("video", "gif"):
+        result["thumbnail"] = os.path.basename(target)
+    else:
+        # static images: store full path so QML loads the original file as thumbnail
+        result["thumbnail"] = path
+    result["mtime"] = os.path.getmtime(path)
+    result["path"] = path
+    return result, None
+
+# ─── Index management ──────────────────────────────────────────
+
+def find_images():
+    all_exts = STATIC_EXTS + GIF_EXTS + VIDEO_EXTS
+    seen = set()
+    unique = []
+    for d in WALLPAPER_DIRS:
+        if not os.path.isdir(d):
+            continue
+        for root, dirs, files in os.walk(d):
+            dn = os.path.basename(root)
+            if dn.startswith(".") or root == THUMB_DIR or root.startswith(ORGANIZE_DIR):
+                dirs[:] = []
+                continue
+            for f in files:
+                if f.lower().endswith(all_exts):
+                    rp = os.path.realpath(os.path.join(root, f))
+                    if rp not in seen:
+                        seen.add(rp)
+                        unique.append(rp)
+    return sorted(unique)
+
+def load_index():
+    if os.path.exists(INDEX_PATH):
+        try:
+            with open(INDEX_PATH) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"version": 3, "images": {}, "scan_time": 0, "image_count": 0}
+
+def save_index(idx):
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    with open(INDEX_PATH, "w") as f:
+        json.dump(idx, f, indent=1)
+
+def regenerate_index():
+    """Remove phantom entries from index.json where the file no longer exists on disk."""
+    idx = load_index()
+    images = idx.get("images", {})
+    to_remove = []
+    for path, entry in images.items():
+        if not os.path.isfile(path):
+            to_remove.append(path)
+            thumb = entry.get("thumbnail", "")
+            if thumb:
+                tp = resolve_thumb_path(entry)
+                if tp and os.path.isfile(tp):
+                    try:
+                        os.remove(tp)
+                    except Exception:
+                        pass
+    for p in to_remove:
+        del images[p]
+    idx["image_count"] = len(images)
+    save_index(idx)
+    print(f"[wallsync] Phantom entries removed: {len(to_remove)}", file=sys.stderr)
+    return idx
+
+def load_state():
+    if os.path.exists(STATE_PATH):
+        try:
+            with open(STATE_PATH) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"current": {}, "history": {"primary": [], "secondary": []}}
+
+def save_state(st):
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    with open(STATE_PATH, "w") as f:
+        json.dump(st, f, indent=1)
+
+# ─── Monitor / wallpaper utilities ─────────────────────────────
+
+def get_monitors():
+    try:
+        r = subprocess.run(
+            ["dms", "randr", "--json"],
+            capture_output=True, text=True, timeout=5, env=os.environ.copy()
+        )
+        if r.returncode != 0:
+            return []
+        data = json.loads(r.stdout)
+        outputs = data.get("outputs", data if isinstance(data, list) else [])
+        return [o["name"] for o in outputs if o.get("enabled", True)]
+    except Exception:
+        return []
+
+def set_wallpaper_dms(output, path):
+    env = os.environ.copy()
+    subprocess.run(
+        ["dms", "ipc", "call", "wallpaper", "setFor", output, path],
+        capture_output=True, timeout=10, env=env
+    )
+
+def set_wallpaper_awww(output, path):
+    env = os.environ.copy()
+    print(f"[DEBUG] set_wallpaper_awww(output={output}, path={os.path.basename(path)})", file=sys.stderr)
+    print(f"[DEBUG] awww img --outputs {output} --transition-type {TRANSITION_TYPE}", file=sys.stderr)
+    r = subprocess.run([
+        "awww", "img", path,
+        "--outputs", output,
+        "--transition-type", TRANSITION_TYPE,
+        "--transition-pos", TRANSITION_POS,
+        "--transition-step", str(TRANSITION_STEP),
+        "--transition-fps", "60",
+        "--resize", "crop",
+        "--filter", "Lanczos3",
+    ], capture_output=True, timeout=30, env=env)
+    if r.returncode == 0:
+        print(f"[DEBUG] awww transition 'grow' succeeded on {output}", file=sys.stderr)
+        return True
+    print(f"[wallsync WARN] awww transition 'grow' failed for {output}: {r.stderr.strip()}", file=sys.stderr)
+    return False
+
+def set_live_wallpaper(output, path):
+    """Launch mpvpaper with VA-API GPU hardware acceleration (hwdec=auto) for video wallpapers.
+       Returns True only if mpvpaper is confirmed running after 2 seconds."""
+    env = os.environ.copy()
+    print(f"[wallsync LIVE] Executing mpvpaper (hwdec=auto) for output '{output}': {os.path.basename(path)}", file=sys.stderr)
+
+    subprocess.run(["pkill", "-f", "mpvpaper"], capture_output=True, env=env)
+    time.sleep(0.3)
+
+    if not shutil.which("mpvpaper"):
+        print(f"\033[93m[wallsync WARN] 'mpvpaper' binary not found in PATH.\033[0m", file=sys.stderr)
+        return False
+
+    try:
+        p = subprocess.Popen([
+            "mpvpaper", "-p", "-o", "no-audio loop hwdec=auto", output, path
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+        print(f"[DEBUG] mpvpaper PID {p.pid} spawned, waiting 2s to verify...", file=sys.stderr)
+        time.sleep(2)
+        if p.poll() is None:
+            print(f"[wallsync LIVE] mpvpaper confirmed running on {output} (PID: {p.pid})", file=sys.stderr)
+            return True
+        else:
+            print(f"\033[91m[wallsync ERROR] mpvpaper died immediately on {output} (exit code: {p.returncode})\033[0m", file=sys.stderr)
+            return False
+    except Exception as e:
+        print(f"\033[91m[wallsync ERROR] Failed to start mpvpaper on {output}: {e}\033[0m", file=sys.stderr)
+        return False
+
+def convert_mp4_to_gif(mp4_path):
+    gif_path = f"/tmp/wallsync_{os.path.basename(mp4_path)}.gif"
+    if os.path.isfile(gif_path) and os.path.getsize(gif_path) > 1000:
+        return gif_path
+    print(f"[wallsync] Converting MP4 to GIF: {os.path.basename(mp4_path)}", file=sys.stderr)
+    r = subprocess.run([
+        "ffmpeg", "-y", "-i", mp4_path,
+        "-vf", "fps=15,scale=480:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse",
+        "-loop", "0",
+        gif_path
+    ], capture_output=True, timeout=120)
+    if r.returncode != 0:
+        print(f"[wallsync ERROR] ffmpeg GIF conversion failed: {r.stderr.strip()}", file=sys.stderr)
+        return None
+    if os.path.isfile(gif_path) and os.path.getsize(gif_path) > 1000:
+        print(f"[wallsync] GIF created: {gif_path}", file=sys.stderr)
+        return gif_path
+    return None
+
+def resolve_thumb_path(entry):
+    raw = (entry or {}).get("thumbnail", "")
+    if not raw:
+        return ""
+    return raw if raw.startswith("/") else os.path.join(THUMB_DIR, raw)
+
+def run_matugen(path):
+    """Execute Matugen non-interactively using --source-color-index 0 and stdin=DEVNULL."""
+    if not path or not os.path.isfile(path) or os.path.getsize(path) < 100:
+        return False, f"Image file for Matugen invalid or missing: '{path}'"
+    
+    env = os.environ.copy()
+    cmd = ["matugen", "image", "--source-color-index", "0", path]
+    try:
+        r = subprocess.run(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env
+        )
+        return r.returncode == 0, r.stderr.strip() if r.returncode != 0 else ""
+    except Exception as e:
+        return False, str(e)
+
+def apply_to_monitor(output, path):
+    mtype = media_type(path)
+    env = os.environ.copy()
+    print(f"[DEBUG] apply_to_monitor(output={output}, path={os.path.basename(path)}, type={mtype})", file=sys.stderr)
+
+    # DO NOT call pkill -f mpvpaper here for static/GIF — that would kill a live wallpaper
+    # running on ANOTHER output (e.g. primary monitor). mpvpaper is killed centrally in cmd_match.
+    # set_live_wallpaper handles its own kill before starting a new process.
+    if mtype == "video":
+        subprocess.run(["awww", "clear", "--outputs", output], capture_output=True, timeout=10, env=env)
+        success = set_live_wallpaper(output, path)
+        if not success:
+            print(f"[wallsync WARN] mpvpaper failed for {output}, converting MP4→GIF as fallback", file=sys.stderr)
+            gif = convert_mp4_to_gif(path)
+            if gif:
+                print(f"[DEBUG] GIF fallback path: {gif}", file=sys.stderr)
+                set_wallpaper_awww(output, gif)
+            else:
+                print(f"[wallsync ERROR] All playback methods failed for {os.path.basename(path)} on {output}", file=sys.stderr)
+    elif mtype == "gif":
+        ok = set_wallpaper_awww(output, path)
+        if not ok:
+            print(f"[wallsync ERROR] awww failed to display GIF on {output}", file=sys.stderr)
+    else:
+        ok = set_wallpaper_awww(output, path)
+        if not ok:
+            print(f"[wallsync WARN] awww failed on {output}, falling back to mpvpaper static loop", file=sys.stderr)
+            if shutil.which("mpvpaper"):
+                subprocess.Popen([
+                    "mpvpaper", output, path
+                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+            else:
+                print(f"[wallsync ERROR] No display method available for {output}", file=sys.stderr)
+
+def find_match(primary_path, idx, exclude=None):
+    """Find color/ vibe-matched secondary wallpaper. STRICT NO RANDOM FALLBACK."""
+    if exclude is None:
+        exclude = set()
+    exclude.add(primary_path)
+    primary = idx.get("images", {}).get(primary_path)
+    if not primary:
+        print(f"[DEBUG] find_match: primary '{os.path.basename(primary_path)}' not in index, mirroring", file=sys.stderr)
+        return primary_path
+    primary_vibes = primary.get("vibes", [])
+    pal1 = [(h, s, l, w) for h, s, l, w in primary.get("palette", [])]
+    if not pal1 or not primary_vibes:
+        print(f"[DEBUG] find_match: primary has no vibes/palette, mirroring", file=sys.stderr)
+        return primary_path
+    print(f"[DEBUG] find_match: primary_vibes={primary_vibes}", file=sys.stderr)
+    vibe_candidates = []
+    other_candidates = []
+    for path, entry in idx.get("images", {}).items():
+        if path in exclude or not os.path.isfile(path):
+            continue
+        pal2 = [(h, s, l, w) for h, s, l, w in entry.get("palette", [])]
+        if not pal2:
+            continue
+        d = palette_distance(pal1, pal2)
+        cv = [v for v in primary_vibes if v in entry.get("vibes", [])]
+        if cv:
+            vibe_candidates.append((len(cv), d, path))
+        else:
+            other_candidates.append((d, path))
+    if vibe_candidates:
+        vibe_candidates.sort(key=lambda x: (-x[0], x[1]))
+        chosen = vibe_candidates[0][2]
+        print(f"[DEBUG] find_match: vibe match: {os.path.basename(chosen)} (shared={vibe_candidates[0][0]}, dist={vibe_candidates[0][1]:.3f})", file=sys.stderr)
+        return chosen
+    if other_candidates:
+        other_candidates.sort(key=lambda x: x[0])
+        chosen = other_candidates[0][1]
+        print(f"[DEBUG] find_match: palette match (no shared vibes): {os.path.basename(chosen)} (dist={other_candidates[0][0]:.3f})", file=sys.stderr)
+        return chosen
+    print(f"[DEBUG] find_match: no candidates found, mirroring primary", file=sys.stderr)
+    return primary_path
+
+def record_use(primary, secondary=None):
+    st = load_state()
+    hist = st.setdefault("history", {"primary": [], "secondary": []})
+    hist.setdefault("primary", []).insert(0, primary)
+    hist["primary"] = hist["primary"][:HISTORY_SIZE]
+    if secondary:
+        hist.setdefault("secondary", []).insert(0, secondary)
+        hist["secondary"] = hist["secondary"][:HISTORY_SIZE]
+    st["current"] = {"primary": primary, "secondary": secondary, "time": time.time()}
+    save_state(st)
+
+# ─── Command implementations ───────────────────────────────────
+
+def cmd_match(args):
+    # Write debug marker to trace EXACTLY what path QML sends
+    debug_log = "/tmp/wallsync_debug.txt"
+    with open(debug_log, "a") as df:
+        df.write(f"\n=== cmd_match called at {time.time()} ===\n")
+        df.write(f"args.image raw: {args.image!r}\n")
+        df.write(f"all sys.argv: {sys.argv!r}\n")
+
+    # 0. AGGRESSIVE CLEANUP: kill rogue wallpaper-matching script, kill mpvpaper
+    print("[DEBUG] cmd_match: Starting cleanup...", file=sys.stderr)
+    subprocess.run(["pkill", "-9", "-f", "wallpaper-matching"], capture_output=True)
+    subprocess.run(["pkill", "-f", "mpvpaper"], capture_output=True)
+
+    # Do NOT kill awww-daemon — it causes crash loops. Verify it's running instead.
+    awww_ok = subprocess.run(["awww", "query"], capture_output=True, timeout=5)
+    if awww_ok.returncode != 0:
+        print("[DEBUG] awww-daemon not responding, restarting...", file=sys.stderr)
+        subprocess.Popen(["awww-daemon"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(1.5)
+    else:
+        print(f"[DEBUG] awww-daemon is running. Monitors:\n{awww_ok.stdout.decode().strip()}", file=sys.stderr)
+
+    # 1. Clean URL protocol prefix & decode URI characters (e.g. %20 -> space)
+    raw_path = args.image.strip()
+    if raw_path.startswith("file://"):
+        raw_path = raw_path[7:]
+    raw_path = urllib.parse.unquote(raw_path)
+    path = os.path.realpath(os.path.abspath(raw_path))
+    print(f"[DEBUG] Cleaned path: {path}", file=sys.stderr)
+    with open(debug_log, "a") as df:
+        df.write(f"Cleaned path: {path!r}\n")
+        df.write(f"Basename: {os.path.basename(path)!r}\n")
+        df.write(f"isfile: {os.path.isfile(path)}\n")
+        idx_data = load_index()
+        if path in idx_data.get("images", {}):
+            df.write(f"In index: YES\n")
+        else:
+            df.write(f"In index: NO\n")
+
+    # 2. Strict path validation: Must be an existing file. NO RANDOM FALLBACK.
+    if not os.path.isfile(path):
+        print(f"\033[91m[wallsync ERROR] Selected wallpaper file not found: '{path}'\033[0m", file=sys.stderr)
+        print(f"\033[93m[wallsync HINT] Run 'wallsync index --regen' to remove phantom entries from the index.\033[0m", file=sys.stderr)
+        sys.exit(1)
+
+    idx = load_index()
+    if path not in idx.get("images", {}):
+        print(f"Image not in index. Indexing on-the-fly: {os.path.basename(path)}...", file=sys.stderr)
+        result, err = index_media(path)
+        if result:
+            idx["images"][path] = result
+            save_index(idx)
+
+    monitors = get_monitors()
+    print(f"[DEBUG] Monitors detected: {monitors}", file=sys.stderr)
+    if not monitors:
+        print("\033[91m[wallsync ERROR] No active Wayland monitors detected.\033[0m", file=sys.stderr)
+        sys.exit(1)
+
+    primary_monitor = getattr(args, 'output', None) if getattr(args, 'output', None) else monitors[0]
+    secondary_monitor = next((m for m in monitors if m != primary_monitor), None)
+    print(f"[DEBUG] primary={primary_monitor}, secondary={secondary_monitor}", file=sys.stderr)
+
+    # 3. Resolve image source for DMS + Matugen (extract frame for videos).
+    # DMS's "theme worker" can only process STATIC IMAGES. Passing a video path
+    # causes "theme worker failed" and DMS reverts to a fallback wallpaper.
+    mtype = media_type(path)
+    dms_source = path
+    matugen_source = path
+    if mtype != "static":
+        temp_frame = f"/tmp/wallsync_matugen_{path_hash(path)}.jpg"
+        subprocess.run(["ffmpeg", "-y", "-i", path, "-ss", "00:00:02", "-vframes", "1", temp_frame],
+                       capture_output=True, timeout=30)
+        if os.path.isfile(temp_frame) and os.path.getsize(temp_frame) > 1000:
+            dms_source = temp_frame
+            matugen_source = temp_frame
+            print(f"[DEBUG] Extracted frame for DMS/Matugen: {temp_frame}", file=sys.stderr)
+        else:
+            print("[DEBUG] ffmpeg frame extraction failed for DMS/Matugen", file=sys.stderr)
+
+    # 4. Apply wallpapers via awww FIRST — immediate "grow" transition.
+    print(f"Applying Primary   [{primary_monitor}]: {os.path.basename(path)}")
+    apply_to_monitor(primary_monitor, path)
+
+    secondary_path = path
+    if secondary_monitor:
+        matched = find_match(path, idx)
+        print(f"[DEBUG] find_match returned: {matched}", file=sys.stderr)
+        if matched and os.path.isfile(matched):
+            secondary_path = matched
+        print(f"Applying Secondary [{secondary_monitor}]: {os.path.basename(secondary_path)}")
+        apply_to_monitor(secondary_monitor, secondary_path)
+
+    # Show desktop notification
+    primary_name = os.path.basename(path)
+    secondary_name = os.path.basename(secondary_path)
+    subprocess.run(
+        ["notify-send", "Wallsync", f"Primary: {primary_name}\nSecondary: {secondary_name}"],
+        capture_output=True, timeout=5
+    )
+    with open("/tmp/wallsync_last_applied.txt", "w") as lf:
+        lf.write(f"primary={path}\nsecondary={secondary_path}\n")
+
+    # 5. Run Matugen (wallpaper already visible — no perceived delay).
+    if matugen_source and os.path.isfile(matugen_source):
+        print(f"[DEBUG] Calling run_matugen with: {matugen_source}", file=sys.stderr)
+        ok, err = run_matugen(matugen_source)
+        if ok:
+            print("Matugen → ✓")
+        else:
+            print(f"\033[93mMatugen Warning: {err}\033[0m", file=sys.stderr)
+    else:
+        print("\033[93mMatugen Warning: Could not resolve valid static image frame.\033[0m", file=sys.stderr)
+
+    # 6. Update DMS state LAST — needed for DMS to apply theme colors.
+    # Since awww already set the same wallpaper, DMS's "disc" transition is
+    # invisible (same image → same image, no visual change).
+    if dms_source and os.path.isfile(dms_source):
+        print(f"[DEBUG] Setting DMS wallpaper to: {dms_source}", file=sys.stderr)
+        subprocess.run(
+            ["dms", "ipc", "call", "wallpaper", "setFor", primary_monitor, dms_source],
+            capture_output=True, text=True, timeout=10, env=os.environ.copy()
+        )
+
+    print(f"[DEBUG] Record_use primary={path}, secondary={secondary_path}", file=sys.stderr)
+    record_use(path, secondary_path)
+
+def cmd_gui(args):
+    qml_config = os.path.expanduser("~/.config/wallsync-picker")
+    if not os.path.isdir(qml_config):
+        print(f"QML picker not found at {qml_config}", file=sys.stderr)
+        sys.exit(1)
+
+    r = subprocess.run(["pkill", "-f", "quickshell.*wallsync-picker"], capture_output=True)
+    if r.returncode == 0:
+        # Killed existing picker. Check if QML left a pending selection file.
+        sel = "/tmp/wallsync_selection"
+        if os.path.isfile(sel):
+            with open(sel) as f:
+                pending = f.read().strip()
+            os.remove(sel)
+            if pending:
+                print(f"[wallsync] Pickup pending selection: {pending}", file=sys.stderr)
+                args.image = pending
+                cmd_match(args)
+        return
+
+    # Clean up any stale selection file before opening picker
+    sel = "/tmp/wallsync_selection"
+    if os.path.isfile(sel):
+        os.remove(sel)
+
+    # Regenerate index to remove phantom entries BEFORE showing the picker
+    print("[wallsync] Regenerating index (removing phantom entries)...", file=sys.stderr)
+    regenerate_index()
+
+    env = os.environ.copy()
+    env["QML_XHR_ALLOW_FILE_READ"] = "1"
+    cmd = ["quickshell", "-n", "-p", qml_config]
+    subprocess.run(cmd, env=env)
+
+    # After quickshell exits, check if a selection was written
+    if os.path.isfile(sel):
+        with open(sel) as f:
+            pending = f.read().strip()
+        os.remove(sel)
+        if pending:
+            print(f"[wallsync] QML left selection: {pending}", file=sys.stderr)
+            args.image = pending
+            cmd_match(args)
+
+def cmd_index(args):
+    """Build/update the wallpaper color index with optional phantom cleanup."""
+    # Always regenerate (remove phantom entries) before indexing
+    regenerate_index()
+
+    idx = load_index()
+    images = set(find_images())
+    existing = set(idx.get("images", {}).keys())
+    to_index = images - existing if not args.force else images
+    to_remove = existing - images
+    print(f"Total images on disk: {len(images)}", file=sys.stderr)
+    print(f"Already indexed: {len(existing - to_remove)}", file=sys.stderr)
+    print(f"To index: {len(to_index)}", file=sys.stderr)
+    if to_remove:
+        print(f"Stale entries to remove: {len(to_remove)}", file=sys.stderr)
+        for p in to_remove:
+            del idx["images"][p]
+
+    if not to_index and not to_remove:
+        print("Index is up to date.", file=sys.stderr)
+        return
+
+    indexed = 0
+    errors = 0
+    workers = min(args.workers, os.cpu_count() or 4)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        fut = {pool.submit(index_media, p): p for p in to_index}
+        for f in as_completed(fut):
+            p = fut[f]
+            try:
+                result, err = f.result()
+                if result and not err:
+                    idx["images"][p] = result
+                    indexed += 1
+                else:
+                    print(f"  Error indexing {os.path.basename(p)}: {err}", file=sys.stderr)
+                    errors += 1
+            except Exception as e:
+                print(f"  Exception indexing {os.path.basename(p)}: {e}", file=sys.stderr)
+                errors += 1
+
+    idx["scan_time"] = time.time()
+    idx["image_count"] = len(idx["images"])
+    save_index(idx)
+    print(f"Done. Indexed {indexed}, errors {errors}, total {idx['image_count']}", file=sys.stderr)
+
+def main():
+    parser = argparse.ArgumentParser(description="Dual-monitor wallpaper manager for Niri + DMS + Matugen")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_idx = sub.add_parser("index", help="Build/update color index")
+    p_idx.add_argument("--force", action="store_true")
+    p_idx.add_argument("--regen", action="store_true", help="Remove phantom entries (deleted files) from the index")
+    p_idx.add_argument("--workers", type=int, default=4, help="Parallel workers (default: 4)")
+
+    p_rand = sub.add_parser("random", help="Random coordinated wallpaper pair")
+    p_rand.add_argument("--vibe", "-v", help="Filter by vibe")
+
+    sub.add_parser("next", help="Alias for 'random' (for Super+Y)")
+
+    p_set = sub.add_parser("set", help="Set wallpaper + find match")
+    p_set.add_argument("image")
+
+    p_match = sub.add_parser("match", help="Set + coordinate other monitors")
+    p_match.add_argument("image")
+    p_match.add_argument("--output", "-o", help="Target output name")
+
+    p_gui = sub.add_parser("gui", help="Launch Quickshell wallpaper picker overlay")
+
+    args = parser.parse_args()
+
+    if args.command == "match" or args.command == "set":
+        cmd_match(args)
+    elif args.command == "gui":
+        cmd_gui(args)
+    elif args.command == "index":
+        if args.regen:
+            regenerate_index()
+        else:
+            cmd_index(args)
+
+if __name__ == "__main__":
+    main()
