@@ -235,10 +235,28 @@ def extract_colors(path):
         return None, "no colors extracted"
     colors.sort(key=lambda x: x[3], reverse=True)
     normalized = [(h, s, l, c / total_pixels) for h, s, l, c in colors]
-    dom_h = sum(h * w for h, s, l, w in normalized)
+    import math
+    # 1. Vectorial average for dominant Hue to handle polar coordinates correctly
+    avg_x = sum(math.cos(math.radians(h)) * w for h, s, l, w in normalized)
+    avg_y = sum(math.sin(math.radians(h)) * w for h, s, l, w in normalized)
+    dom_h = math.degrees(math.atan2(avg_y, avg_x)) % 360.0
+    
     dom_s = sum(s * w for h, s, l, w in normalized)
     dom_l = sum(l * w for h, s, l, w in normalized)
-    vibes = classify_vibes(dom_h, dom_s, dom_l)
+    
+    # 2. Extract vibes from all significant colors in the palette (weight >= 0.15)
+    vibes_set = set()
+    for h, s, l, w in normalized:
+        if w >= 0.15:
+            # Classify each significant color and add its vibes
+            for v in classify_vibes(h, s, l):
+                vibes_set.add(v)
+                
+    # If no vibes were added (e.g. all weights < 0.15), fallback to the dominant color
+    if not vibes_set:
+        vibes_set = set(classify_vibes(dom_h, dom_s, dom_l))
+        
+    vibes = sorted(list(vibes_set))
     ri = subprocess.run(
         ["magick", path, "-format", "%w %h", "info:"],
         capture_output=True, text=True, timeout=10
@@ -677,14 +695,15 @@ def cmd_match(args):
         print("\033[93mMatugen Warning: Could not resolve valid static image frame.\033[0m", file=sys.stderr)
 
     # 6. Update DMS state LAST — needed for DMS to apply theme colors.
-    # Since awww already set the same wallpaper, DMS's "disc" transition is
-    # invisible (same image → same image, no visual change).
+    # We update all detected active monitors in DMS to ensure the Theme worker receives the change 
+    # regardless of which monitor is configured as the primary theme output in settings.json.
     if dms_source and os.path.isfile(dms_source):
         print(f"[DEBUG] Setting DMS wallpaper to: {dms_source}", file=sys.stderr)
-        subprocess.run(
-            ["dms", "ipc", "call", "wallpaper", "setFor", primary_monitor, dms_source],
-            capture_output=True, text=True, timeout=10, env=os.environ.copy()
-        )
+        for m in monitors:
+            subprocess.run(
+                ["dms", "ipc", "call", "wallpaper", "setFor", m, dms_source],
+                capture_output=True, text=True, timeout=10, env=os.environ.copy()
+            )
 
     print(f"[DEBUG] Record_use primary={path}, secondary={secondary_path}", file=sys.stderr)
     record_use(path, secondary_path)
