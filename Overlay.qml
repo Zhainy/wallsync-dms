@@ -375,7 +375,10 @@ PanelWindow {
                                     "cool": "#78909c",
                                     "dark": "#455a64",
                                     "monochrome": "#cfd8dc",
-                                    "gray": "#90a4ae"
+                                    "gray": "#90a4ae",
+                                    "warm": "#ff7043",
+                                    "vibrant": "#ffca28",
+                                    "pastel": "#e1bee7"
                                 };
                                 return colors[vibeName.toLowerCase()] || "#90a4ae";
                             }

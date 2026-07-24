@@ -122,11 +122,13 @@ def classify_vibes(h, s, l):
 
     if l < 0.14:
         vibes.add("dark")
-        if s < 0.08:
+        if s < 0.12:
+            vibes.add("monochrome")
             vibes.add("gray")
         return sorted(vibes)
 
-    if s < 0.10:
+    if s < 0.12:
+        vibes.add("monochrome")
         vibes.add("gray")
         if l < 0.25:
             vibes.add("dark")
