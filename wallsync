@@ -244,17 +244,17 @@ def extract_colors(path):
     dom_s = sum(s * w for h, s, l, w in normalized)
     dom_l = sum(l * w for h, s, l, w in normalized)
     
-    # 2. Extract vibes from all significant colors in the palette (weight >= 0.15)
+    # 2. Extract vibes from all significant colors in the palette (weight >= 0.30)
+    # We ignore low saturation colors (s < 0.18) to prevent neutral colors from adding vivid vibes
     vibes_set = set()
     for h, s, l, w in normalized:
-        if w >= 0.15:
-            # Classify each significant color and add its vibes
+        if w >= 0.30 and s >= 0.18:
             for v in classify_vibes(h, s, l):
                 vibes_set.add(v)
                 
-    # If no vibes were added (e.g. all weights < 0.15), fallback to the dominant color
-    if not vibes_set:
-        vibes_set = set(classify_vibes(dom_h, dom_s, dom_l))
+    # Always include the vibes of the primary dominant vector color
+    for v in classify_vibes(dom_h, dom_s, dom_l):
+        vibes_set.add(v)
         
     vibes = sorted(list(vibes_set))
     ri = subprocess.run(
