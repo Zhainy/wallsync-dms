@@ -30,15 +30,16 @@ def load_dms_settings():
         try:
             with open(p_set, "r") as f:
                 data = json.load(f)
-            ws = data.get("wallsync", {})
+            ws = data.get("wallsyncDms", {})
             if ws:
                 dirs = ws.get("wallpaperDirs")
                 if dirs:
                     WALLPAPER_DIRS = [os.path.expanduser(x.strip()) for x in dirs.split(",") if x.strip()]
                 
-                COLOR_DIST_HUE_W = float(ws.get("hueWeight", COLOR_DIST_HUE_W))
-                COLOR_DIST_SAT_W = float(ws.get("satWeight", COLOR_DIST_SAT_W))
-                COLOR_DIST_LIT_W = float(ws.get("litWeight", COLOR_DIST_LIT_W))
+                # Interface uses 0-100 scale, divide by 100 for core python engine compatibility
+                COLOR_DIST_HUE_W = float(ws.get("hueWeight", COLOR_DIST_HUE_W * 100)) / 100.0
+                COLOR_DIST_SAT_W = float(ws.get("satWeight", COLOR_DIST_SAT_W * 100)) / 100.0
+                COLOR_DIST_LIT_W = float(ws.get("litWeight", COLOR_DIST_LIT_W * 100)) / 100.0
                 
                 TRANSITION_TYPE = ws.get("transitionType", TRANSITION_TYPE)
                 TRANSITION_STEP = str(ws.get("transitionStep", TRANSITION_STEP))
@@ -689,7 +690,7 @@ def cmd_match(args):
     record_use(path, secondary_path)
 
 def cmd_gui(args):
-    qml_config = os.path.expanduser("~/.config/DankMaterialShell/plugins/wallsync")
+    qml_config = os.path.expanduser("~/.config/DankMaterialShell/plugins/wallsyncDms")
     if not os.path.isdir(qml_config):
         qml_config = os.path.expanduser("~/.config/wallsync-picker")
     if not os.path.isdir(qml_config):
@@ -724,7 +725,7 @@ def cmd_gui(args):
     
     # Check if we are running as a standalone picker file vs plugin folder entry point
     if os.path.isfile(os.path.join(qml_config, "Overlay.qml")):
-        cmd = ["quickshell", "-n", "-p", qml_config, "Overlay.qml"]
+        cmd = ["quickshell", "-n", "-p", os.path.join(qml_config, "Overlay.qml")]
     else:
         cmd = ["quickshell", "-n", "-p", qml_config]
         
@@ -786,6 +787,32 @@ def cmd_index(args):
     save_index(idx)
     print(f"Done. Indexed {indexed}, errors {errors}, total {idx['image_count']}", file=sys.stderr)
 
+def cmd_random(args):
+    import random
+    idx = load_index()
+    images = idx.get("images", {})
+    if not images:
+        print("[wallsync ERROR] No images found in index database. Run 'wallsync index' first.", file=sys.stderr)
+        sys.exit(1)
+
+    candidates = list(images.keys())
+    vibe = getattr(args, "vibe", None)
+    if vibe:
+        vibe_lower = vibe.lower()
+        candidates = [p for p in candidates if vibe_lower in [v.lower() for v in images[p].get("vibes", [])]]
+
+    if not candidates:
+        if vibe:
+            print(f"[wallsync WARN] No wallpapers found matching vibe: {vibe}", file=sys.stderr)
+        else:
+            print("[wallsync WARN] No wallpapers available.", file=sys.stderr)
+        sys.exit(1)
+
+    selected = random.choice(candidates)
+    print(f"[wallsync] Selected random wallpaper: {os.path.basename(selected)}", file=sys.stderr)
+    args.image = selected
+    cmd_match(args)
+
 def main():
     parser = argparse.ArgumentParser(description="Dual-monitor wallpaper manager for Niri + DMS + Matugen")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -813,6 +840,8 @@ def main():
 
     if args.command == "match" or args.command == "set":
         cmd_match(args)
+    elif args.command == "random" or args.command == "next":
+        cmd_random(args)
     elif args.command == "gui":
         cmd_gui(args)
     elif args.command == "index":

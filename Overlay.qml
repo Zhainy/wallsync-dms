@@ -2,12 +2,13 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Effects
 import Quickshell
+import Quickshell.Io
 import Quickshell.Wayland
 
 PanelWindow {
     id: root
 
-    readonly property string homeDir: Env.homePath
+    readonly property string homeDir: Quickshell.env("HOME")
     readonly property string cacheDir: homeDir + "/.cache/wallsync"
     readonly property string indexPath: "file://" + cacheDir + "/index.json"
     readonly property string statePath: "file://" + cacheDir + "/state.json"
@@ -30,13 +31,35 @@ PanelWindow {
     readonly property int cardW: 360
     readonly property int cardH: 225
 
+    property string vibeStyle: "text"
+
     ListModel { id: wallpaperModel }
     ListModel { id: vibeModel }
 
     Component.onCompleted: {
         mainFocusScope.forceActiveFocus()
+        loadDmsSettings()
         loadState()
         loadIndex()
+    }
+
+    function loadDmsSettings() {
+        var xhr = new XMLHttpRequest()
+        var settingsPath = "file://" + root.homeDir + "/.config/DankMaterialShell/plugin_settings.json"
+        xhr.open("GET", settingsPath)
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState === XMLHttpRequest.DONE) {
+                if (xhr.responseText && xhr.responseText.length > 0) {
+                    try {
+                        var settings = JSON.parse(xhr.responseText)
+                        var ws = settings.wallsyncDms || {}
+                        root.vibeStyle = ws.vibeStyle || "text"
+                        console.log("[wallsync Overlay] Loaded vibeStyle:", root.vibeStyle)
+                    } catch (_) {}
+                }
+            }
+        }
+        xhr.send()
     }
 
     function loadState() {
@@ -259,7 +282,7 @@ PanelWindow {
 
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
-            text: "WALLPAPER COVERFLOW"
+            text: "Wallsync Coverflow"
             color: "#ffffff"
             font.pixelSize: 24
             font.weight: Font.Bold
@@ -339,26 +362,71 @@ PanelWindow {
                             required property int count
                             required property bool active
 
-                            implicitWidth: txt.implicitWidth + 24
+                            function getVibeColor(vibeName) {
+                                const colors = {
+                                    "red": "#ef5350",
+                                    "orange": "#ffb74d",
+                                    "yellow": "#fff176",
+                                    "green": "#81c784",
+                                    "cyan": "#4dd0e1",
+                                    "blue": "#64b5f6",
+                                    "purple": "#ba68c8",
+                                    "pink": "#f06292",
+                                    "cool": "#78909c",
+                                    "dark": "#455a64",
+                                    "monochrome": "#cfd8dc",
+                                    "gray": "#90a4ae"
+                                };
+                                return colors[vibeName.toLowerCase()] || "#90a4ae";
+                            }
+
+                            readonly property bool isDotStyle: root.vibeStyle === "dot" && pill.vibe !== "" && pill.vibe !== "LIVE_ONLY"
+
+                            implicitWidth: isDotStyle ? 28 : (txt.implicitWidth + 24)
                             implicitHeight: 28
                             radius: 14
-                            color: active
-                                ? Qt.hsla(root.accentHue / 360, 0.80, 0.50, 0.95)
-                                : (pillMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.14) : Qt.rgba(1, 1, 1, 0.06))
-                            border.color: active
-                                ? Qt.hsla(root.accentHue / 360, 0.70, 0.65, 1.0)
-                                : Qt.rgba(1, 1, 1, 0.06)
+                            color: {
+                                if (active) {
+                                    return isDotStyle ? getVibeColor(pill.vibe) : Qt.hsla(root.accentHue / 360, 0.80, 0.50, 0.95)
+                                }
+                                return isDotStyle ? getVibeColor(pill.vibe) : Qt.rgba(1, 1, 1, 0.06)
+                            }
+                            opacity: {
+                                if (active) return 1.0
+                                if (isDotStyle) {
+                                    return pillMouse.containsMouse ? 0.92 : 0.80
+                                }
+                                return 1.0
+                            }
+                            border.color: {
+                                if (active) {
+                                    return isDotStyle ? getVibeColor(pill.vibe) : Qt.hsla(root.accentHue / 360, 0.70, 0.65, 1.0)
+                                }
+                                if (isDotStyle) {
+                                    return getVibeColor(pill.vibe)
+                                }
+                                return Qt.rgba(1, 1, 1, 0.06)
+                            }
                             border.width: 1
 
                             Behavior on color { ColorAnimation { duration: 150 } }
+                            Behavior on opacity { NumberAnimation { duration: 150 } }
 
                             Text {
                                 id: txt
                                 anchors.centerIn: parent
-                                text: label + "  " + count
+                                visible: !pill.isDotStyle
+                                text: pill.label + "  " + count
                                 color: active ? "#ffffff" : Qt.rgba(1, 1, 1, 0.70)
                                 font.pixelSize: 11
                                 font.weight: active ? Font.Bold : Font.Normal
+                            }
+
+                            // Tooltip for minimalist dot chips
+                            ToolTip {
+                                visible: pill.isDotStyle && pillMouse.containsMouse
+                                text: pill.label.toUpperCase() + " (" + count + ")"
+                                delay: 300
                             }
 
                             MouseArea {
@@ -367,7 +435,7 @@ PanelWindow {
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
                                 onClicked: {
-                                    filterByVibe(vibe)
+                                    filterByVibe(pill.vibe)
                                     mainFocusScope.forceActiveFocus()
                                 }
                             }

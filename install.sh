@@ -4,12 +4,12 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TARGET_DIR="$HOME/.config/DankMaterialShell/plugins/wallsync"
+TARGET_DIR="$HOME/.config/DankMaterialShell/plugins/wallsyncDms"
 
 echo "🎨 Installing wallsync-dms to DMS plugin directory..."
 echo "Target path: $TARGET_DIR"
 
-mkdir -p "$TARGET_DIR/daemon"
+mkdir -p "$TARGET_DIR"
 mkdir -p "$HOME/.cache/wallsync"
 mkdir -p "$HOME/.local/share/wallsync/thumbnails"
 
@@ -17,20 +17,16 @@ mkdir -p "$HOME/.local/share/wallsync/thumbnails"
 cp "$SCRIPT_DIR/plugin.json" "$TARGET_DIR/"
 cp "$SCRIPT_DIR/Daemon.qml" "$TARGET_DIR/"
 cp "$SCRIPT_DIR/Overlay.qml" "$TARGET_DIR/"
-cp "$SCRIPT_DIR/Settings.qml" "$TARGET_DIR/"
+cp "$SCRIPT_DIR/WallsyncSettings.qml" "$TARGET_DIR/"
 cp "$SCRIPT_DIR/StartupCheck.qml" "$TARGET_DIR/"
 
 # Copy python backend
-cp "$SCRIPT_DIR/daemon/wallsync" "$TARGET_DIR/daemon/wallsync"
-chmod +x "$TARGET_DIR/daemon/wallsync"
+cp "$SCRIPT_DIR/wallsync" "$TARGET_DIR/wallsync"
+chmod +x "$TARGET_DIR/wallsync"
 
 # Copy preview resources
 cp "$SCRIPT_DIR/preview.png" "$TARGET_DIR/" 2>/dev/null || true
 
-# Symlink wallsync binary to local bin for PATH access
-echo "→ Creating symlink at ~/.local/bin/wallsync..."
-mkdir -p "$HOME/.local/bin"
-ln -sf "$TARGET_DIR/daemon/wallsync" "$HOME/.local/bin/wallsync"
 
 echo "Checking system dependency status..."
 deps=(python3 magick ffmpeg awww matugen)

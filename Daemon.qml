@@ -7,10 +7,10 @@ QtObject {
     id: root
 
     property var pluginService: null
-    property string pluginId: "wallsync"
+    property string pluginId: "wallsyncDms"
 
     // Path resolving helper
-    readonly property string pythonScript: Quickshell.pluginPath + "/daemon/wallsync"
+    readonly property string pythonScript: Quickshell.pluginPath + "/wallsync"
     readonly property string overlayPath: Quickshell.pluginPath + "/Overlay.qml"
 
     Component.onCompleted: {

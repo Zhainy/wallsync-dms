@@ -1,16 +1,19 @@
 {
-  "id": "wallsync",
-  "name": "Wallsync",
-  "description": "Dual-monitor wallpaper manager with 3D coverflow picker, color-coordinated pairing, and Material You theming",
-  "version": "1.0.0",
-  "author": "Zhainy",
-  "icon": "wallpaper",
-  "type": "daemon",
-  "capabilities": ["wallpaper"],
-  "component": "./Daemon.qml",
-  "settings": "./Settings.qml",
-  "startupCheck": "./StartupCheck.qml",
-  "requires_dms": ">=1.5.0",
-  "permissions": ["settings_read", "settings_write", "process"],
-  "dependencies": ["awww", "matugen", "magick", "ffmpeg"]
+    "id": "wallsyncDms",
+    "name": "Wallsync DMS",
+    "description": "Dual-monitor wallpaper manager with 3D coverflow picker, color-coordinated pairing, and Material You theming",
+    "version": "1.0.0",
+    "author": "Zhainy",
+    "icon": "wallpaper",
+    "type": "daemon",
+    "capabilities": [
+        "wallpaper"
+    ],
+    "component": "./Daemon.qml",
+    "settings": "./WallsyncSettings.qml",
+    "requires_dms": ">=1.2.0",
+    "permissions": [
+        "settings_read",
+        "settings_write"
+    ]
 }
